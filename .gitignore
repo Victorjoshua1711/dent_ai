@@ -1,0 +1,52 @@
+# ==========================================
+# Dental AI - Git Ignore Rules
+# ==========================================
+
+# 1. Model Weights & Checkpoints (Exceeds GitHub 100MB limit)
+# Download weights from Kaggle dataset instead of committing
+*.pt
+*.pth
+*.bin
+*.onnx
+*.engine
+*.weights
+best.pt
+checkpoint*.pth
+
+# 2. Datasets (Large image collections, ~1.8 GB)
+COCO/
+YOLO/YOLO/test/
+YOLO/YOLO/train/
+YOLO/YOLO/valid/
+datasets/
+dataset/
+data/images/
+data/labels/
+
+# 3. Python Caches & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# 4. YOLO / Ultralytics Run Artifacts
+runs/
+yolo*.pt
+
+# 5. IDE & OS Metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 6. Temporary Testing Images & Logs
+test_*.jpg
+test_*.png
+test_output.*
+*.log
