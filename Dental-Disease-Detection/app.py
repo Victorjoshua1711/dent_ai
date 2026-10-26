@@ -54,6 +54,31 @@ RESTORATION_CLASSES = {
     "Abutment", "Metal band", "Orthodontic brackets", "Permanent retainer", "Plating", "Wire", "TAD"
 }
 
+CLINICAL_NOTES = {
+    "Caries": "Cavitation / tooth decay detected. Assess lesion depth and plan restorative treatment.",
+    "Periapical lesion": "Periapical radiolucency observed at root apex. Evaluate pulp vitality and endodontic care.",
+    "Filling": "Existing restorative filling present. Check for marginal breakdown or secondary caries.",
+    "Crown": "Prosthetic crown restoration identified. Verify margin adaptation and periodontal health.",
+    "Root Canal Treatment": "Endodontic root canal obturation noted. Confirm apical seal and periapical status.",
+    "Bone Loss": "Alveolar bone resorption detected. Periodontal probing and hygiene therapy recommended.",
+    "Impacted tooth": "Unerupted / impacted tooth located. Evaluate proximity to adjacent nerve canal and roots.",
+    "Missing teeth": "Edentulous tooth space identified. Assess prosthodontic or implant replacement options.",
+    "Fractured teeth": "Structural fracture line observed. Immediate restorative or surgical evaluation indicated.",
+    "Implant": "Dental implant fixture in place. Check peri-implant bone levels and osseointegration.",
+    "Retained root": "Retained dental root remnant. Evaluate for extraction or surgical clearance.",
+    "Attrition": "Incisal / occlusal tooth wear detected. Evaluate for bruxism or occlusal disharmony.",
+    "Bone defect": "Alveolar bone defect noted. Radiographic and periodontal evaluation recommended.",
+    "Cyst": "Well-defined radiolucent lesion observed. Specialist review and histopathological correlation recommended.",
+    "Root resorption": "External or internal root resorption detected. Immediate endodontic evaluation recommended.",
+    "Primary teeth": "Deciduous / primary tooth present. Monitor natural exfoliation and permanent eruption.",
+    "Mandibular Canal": "Anatomical mandibular nerve canal identified. Observe surgical safety margins.",
+    "Maxillary sinus": "Maxillary sinus floor visualized. Assess pneumatization and subantral height.",
+    "Orthodontic brackets": "Active orthodontic fixed appliance in place. Ensure optimal plaque control.",
+    "Permanent retainer": "Lingual / palatal fixed retainer bonded. Check composite pad bonding integrity.",
+    "Post-core": "Intraradicular post and core foundation observed. Check root integrity and crown retention.",
+    "Malaligned": "Tooth malalignment or crowding identified. Orthodontic alignment assessment recommended."
+}
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
@@ -109,11 +134,21 @@ def process_dental_image(img_pil, show_boxes=False, fill_alpha=0.45, conf_thresh
             conf = float(detection.conf[0].item()) if hasattr(detection, 'conf') and detection.conf is not None else 0.0
             rgb = PALETTE[cls_idx % len(PALETTE)]
             bgr = (rgb[2], rgb[1], rgb[0])
+            hex_color = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
             x1, y1, x2, y2 = detection.xyxy[0].tolist()
+
+            category = "Pathology / Disease" if class_name in PATHOLOGY_CLASSES else (
+                "Restoration / Treatment" if class_name in RESTORATION_CLASSES else "Anatomical Structure"
+            )
+            note = CLINICAL_NOTES.get(class_name, "Clinical examination and radiographic correlation advised.")
 
             ann = {
                 "label": class_name,
                 "confidence": round(conf, 3),
+                "confidence_pct": round(conf * 100, 1),
+                "color": hex_color,
+                "category": category,
+                "clinical_note": note,
                 "bounding_box": {
                     "x1": round(x1, 1), "y1": round(y1, 1),
                     "x2": round(x2, 1), "y2": round(y2, 1)
@@ -185,19 +220,42 @@ def process_dental_image(img_pil, show_boxes=False, fill_alpha=0.45, conf_thresh
     composite_rgb = cv2.cvtColor(composite_bgr, cv2.COLOR_BGR2RGB)
     composite_pil = Image.fromarray(composite_rgb)
 
+    # Prepare summary data structure for the problems breakdown section
+    problems_summary = []
+    for cls_idx, cname, rgb in sorted(detected_classes, key=lambda x: x[0]):
+        matching_anns = [a for a in annotations if a['label'] == cname]
+        avg_c = round(sum(a['confidence'] for a in matching_anns) / len(matching_anns) * 100, 1) if matching_anns else 0.0
+        hex_c = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+        cat = "Pathology / Disease" if cname in PATHOLOGY_CLASSES else (
+            "Restoration / Treatment" if cname in RESTORATION_CLASSES else "Anatomical"
+        )
+        problems_summary.append({
+            "name": cname,
+            "count": condition_counts.get(cname, 0),
+            "color": hex_c,
+            "category": cat,
+            "avg_confidence": avg_c,
+            "clinical_note": CLINICAL_NOTES.get(cname, "Clinical examination and radiographic correlation advised.")
+        })
+
     elapsed = round(time.time() - t0, 2)
-    return composite_pil, annotations, condition_counts, elapsed
+    return composite_pil, annotations, condition_counts, problems_summary, elapsed
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dental AI - Clear Affected Area Detection</title>
+  <title>Dent AI - Clear Affected Area Detection</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     .dragover { border-color: #38bdf8 !important; background-color: rgba(56, 189, 248, 0.08) !important; }
+    @media print {
+      header, #uploadCard, #loadingIndicator, footer, button, .no-print { display: none !important; }
+      body { background-color: white !important; color: black !important; }
+      #resultsCard, #problemsBreakdownCard { display: block !important; border: none !important; box-shadow: none !important; }
+    }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans">
@@ -210,14 +268,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <i class="fa-solid fa-tooth text-white text-xl"></i>
         </div>
         <div>
-          <h1 class="text-base sm:text-lg font-bold text-white tracking-wide">Dental AI</h1>
-          <p class="text-xs text-slate-400">Panoramic Radiograph Disease & Restoration Segmentation</p>
+          <h1 class="text-base sm:text-lg font-bold text-white tracking-wide">Dent AI</h1>
+          <p class="text-xs text-slate-400">Panoramic Radiograph Disease & Restoration Detection</p>
         </div>
       </div>
       <div class="flex items-center space-x-3">
         <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
           <span class="w-1.5 h-1.5 mr-1.5 bg-emerald-400 rounded-full animate-ping"></span>
-          Clear Affected Mode Active
+          Dent AI Active
         </span>
       </div>
     </div>
@@ -229,7 +287,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <!-- Title / Instructions -->
     <div class="text-center max-w-3xl mx-auto space-y-2">
       <h2 class="text-2xl sm:text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-200 to-cyan-400">
-        Clear Dental Affected Area Detection
+        Dent AI - Clear Affected Area Detection
       </h2>
       <p class="text-slate-400 text-xs sm:text-sm">
         Highlights the exact affected lesion, cavity, or restoration boundary without confusing outer tooth outline boxes.
@@ -237,7 +295,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <!-- Upload & Controls Card -->
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+    <div id="uploadCard" class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
       
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         <!-- Drag & Drop Zone -->
@@ -330,13 +388,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <i class="fa-solid fa-tooth text-cyan-400 text-lg absolute inset-0 flex items-center justify-center"></i>
       </div>
       <div>
-        <p class="text-slate-200 font-semibold text-base">Segmenting Affected Areas...</p>
+        <p class="text-slate-200 font-semibold text-base">Dent AI is Segmenting Affected Areas...</p>
         <p class="text-slate-400 text-xs mt-1">Isolating precise cavity, restoration, and lesion contours</p>
       </div>
     </div>
 
     <!-- Results Section -->
-    <div id="resultsCard" class="hidden space-y-6">
+    <div id="resultsCard" class="hidden space-y-8">
       
       <!-- Stats Summary -->
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -388,7 +446,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <p class="text-xs text-slate-400">Left: Original Panoramic &nbsp;|&nbsp; Center: Isolated Affected Region &nbsp;|&nbsp; Right: Legend</p>
           </div>
           <div class="flex items-center gap-2">
-            <a id="downloadResultBtn" href="#" download="dental_affected_areas.png" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">
+            <a id="downloadResultBtn" href="#" download="dent_ai_affected_areas.png" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">
               <i class="fa-solid fa-download"></i>
               Download Result
             </a>
@@ -399,22 +457,98 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <img id="resultImage" src="" alt="Analyzed Dental Result" class="max-w-full h-auto rounded shadow-2xl object-contain border border-slate-700/60" />
         </div>
       </div>
+
+      <!-- ======================================================== -->
+      <!-- DEDICATED AFFECTED PROBLEMS BREAKDOWN AREA (BELOW RESULT) -->
+      <!-- ======================================================== -->
+      <div id="problemsBreakdownCard" class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6">
+        
+        <!-- Header & Quick Actions -->
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-800 pb-5">
+          <div>
+            <div class="flex items-center gap-2.5">
+              <span class="w-8 h-8 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-base">
+                <i class="fa-solid fa-stethoscope"></i>
+              </span>
+              <h3 class="text-lg font-bold text-white tracking-wide">
+                Affected Problems & Clinical Breakdown
+              </h3>
+            </div>
+            <p class="text-xs text-slate-400 mt-1 pl-10">
+              Detailed findings report of all detected dental conditions, locations, confidence levels, and clinical guidance.
+            </p>
+          </div>
+
+          <div class="flex items-center gap-2 self-start sm:self-auto no-print">
+            <button id="copySummaryBtn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+              <i class="fa-solid fa-copy text-cyan-400"></i>
+              <span>Copy Report</span>
+            </button>
+            <button id="printReportBtn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+              <i class="fa-solid fa-print text-cyan-400"></i>
+              <span>Print Report</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Problem Cards Grid (Grouped by Condition) -->
+        <div class="space-y-3">
+          <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+            <i class="fa-solid fa-layer-group text-cyan-400"></i>
+            Diagnostic Condition Summary
+          </h4>
+          <div id="problemCardsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <!-- Dynamically populated condition cards -->
+          </div>
+        </div>
+
+        <!-- Individual Findings Table -->
+        <div class="space-y-3 pt-2">
+          <div class="flex items-center justify-between">
+            <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+              <i class="fa-solid fa-list-check text-cyan-400"></i>
+              Detailed Site Findings Log
+            </h4>
+            <span id="findingsCountBadge" class="text-xs text-slate-400 font-mono">0 sites recorded</span>
+          </div>
+
+          <div class="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70">
+            <table class="w-full text-left text-xs text-slate-300">
+              <thead class="bg-slate-900/90 text-slate-400 uppercase font-semibold border-b border-slate-800">
+                <tr>
+                  <th class="py-3 px-4 w-12 text-center">#</th>
+                  <th class="py-3 px-4">Problem / Condition</th>
+                  <th class="py-3 px-4">Classification</th>
+                  <th class="py-3 px-4">Confidence</th>
+                  <th class="py-3 px-4">Location (X, Y)</th>
+                  <th class="py-3 px-4">Clinical Guidance</th>
+                </tr>
+              </thead>
+              <tbody id="findingsTableBody" class="divide-y divide-slate-800/60 font-normal">
+                <!-- Dynamically populated table rows -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
     </div>
 
     <!-- API Reference for Developers -->
-    <div class="bg-slate-900/60 border border-slate-800/80 rounded-xl p-6 space-y-3 text-xs text-slate-400">
+    <div class="bg-slate-900/60 border border-slate-800/80 rounded-xl p-6 space-y-3 text-xs text-slate-400 no-print">
       <h4 class="text-sm font-semibold text-slate-300 flex items-center gap-2">
         <i class="fa-solid fa-terminal text-cyan-400"></i>
-        Direct API Endpoint
+        Dent AI Direct API Endpoint
       </h4>
-      <p>By default, <code class="text-cyan-300 bg-slate-800 px-1.5 py-0.5 rounded">/coordinates</code> produces clean affected-area segmentation masks without confusing rectangular boxes:</p>
+      <p>Send POST requests to <code class="text-cyan-300 bg-slate-800 px-1.5 py-0.5 rounded">/coordinates</code> with multipart form-data to receive the clean affected-area image:</p>
       <pre class="bg-slate-950 p-3 rounded-lg border border-slate-800 text-cyan-300 font-mono overflow-x-auto">curl -X POST http://localhost:5000/coordinates -F "image=@sample_img.jpg" --output output.jpg</pre>
     </div>
 
   </main>
 
   <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
-    Dental AI Panoramic Disease Detection &copy; 2026. Built with Flask, Ultralytics YOLOv8 & PyTorch.
+    Dent AI Panoramic Disease Detection &copy; 2026. Built with Flask, Ultralytics YOLOv8 & PyTorch.
   </footer>
 
   <script>
@@ -434,8 +568,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     const opacitySlider = document.getElementById('opacitySlider');
     const opacityVal = document.getElementById('opacityVal');
     const categoryFilter = document.getElementById('categoryFilter');
+    const problemCardsGrid = document.getElementById('problemCardsGrid');
+    const findingsTableBody = document.getElementById('findingsTableBody');
+    const findingsCountBadge = document.getElementById('findingsCountBadge');
+    const copySummaryBtn = document.getElementById('copySummaryBtn');
+    const printReportBtn = document.getElementById('printReportBtn');
 
     let currentFile = null;
+    let lastAnalysisData = null;
 
     opacitySlider.addEventListener('input', (e) => {
       opacityVal.textContent = `${e.target.value}%`;
@@ -518,15 +658,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         const data = await response.json();
+        lastAnalysisData = data;
 
-        // Render stats
+        // Render top stats
         totalDetections.textContent = data.annotations.length;
         const counts = data.condition_counts || {};
         const uniqueKeys = Object.keys(counts);
         uniqueConditions.textContent = uniqueKeys.length;
         inferenceTime.textContent = `${data.elapsed_seconds}s`;
 
-        // Render badges
+        // Render top badges
         conditionsList.innerHTML = '';
         if (uniqueKeys.length === 0) {
           conditionsList.innerHTML = '<span class="text-xs text-slate-400">No matching conditions detected.</span>';
@@ -544,6 +685,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         resultImage.src = data.image_base64;
         downloadResultBtn.href = data.image_base64;
 
+        // ========================================================
+        // RENDER AFFECTED PROBLEMS BREAKDOWN SECTION (BELOW RESULT)
+        // ========================================================
+        renderProblemsBreakdown(data);
+
         resultsCard.classList.remove('hidden');
       } catch (err) {
         alert('Error analyzing image: ' + err.message);
@@ -551,6 +697,119 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         loadingIndicator.classList.add('hidden');
         analyzeBtn.disabled = false;
       }
+    });
+
+    function renderProblemsBreakdown(data) {
+      const summaryList = data.problems_summary || [];
+      const annotations = data.annotations || [];
+
+      // 1. Render Aggregated Problem Cards Grid
+      problemCardsGrid.innerHTML = '';
+      if (summaryList.length === 0) {
+        problemCardsGrid.innerHTML = '<div class="col-span-full p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-slate-400 text-center text-xs">No dental problems or conditions detected in this radiograph.</div>';
+      } else {
+        summaryList.forEach(item => {
+          const card = document.createElement('div');
+          card.className = 'bg-slate-950/70 border rounded-xl p-4 space-y-2.5 transition hover:border-slate-700 shadow-md flex flex-col justify-between';
+          card.style.borderColor = `${item.color}55`; // Translucent border matching condition color
+
+          const isPathology = item.category.includes('Pathology');
+          const badgeBg = isPathology ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+
+          card.innerHTML = `
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="w-3.5 h-3.5 rounded-full border border-white/60 shadow-sm flex-shrink-0" style="background-color: ${item.color};"></span>
+                  <h5 class="text-sm font-bold text-white tracking-wide">${item.name}</h5>
+                </div>
+                <span class="px-2 py-0.5 rounded-md text-[11px] font-bold text-white bg-slate-800 border border-slate-700">
+                  ${item.count} site${item.count > 1 ? 's' : ''}
+                </span>
+              </div>
+              <div class="flex items-center gap-2 text-[11px]">
+                <span class="px-2 py-0.5 rounded-full font-medium border ${badgeBg}">
+                  ${item.category}
+                </span>
+                <span class="text-slate-400 font-mono">Avg Conf: <strong class="text-slate-200">${item.avg_confidence}%</strong></span>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300/90 pt-1 border-t border-slate-800/80 leading-relaxed">
+              <i class="fa-solid fa-circle-info text-cyan-400 mr-1 text-[10px]"></i> ${item.clinical_note}
+            </p>
+          `;
+          problemCardsGrid.appendChild(card);
+        });
+      }
+
+      // 2. Render Detailed Findings Log Table
+      findingsCountBadge.textContent = `${annotations.length} sites recorded`;
+      findingsTableBody.innerHTML = '';
+      if (annotations.length === 0) {
+        findingsTableBody.innerHTML = `
+          <tr>
+            <td colspan="6" class="py-6 px-4 text-center text-slate-400">No findings identified.</td>
+          </tr>
+        `;
+      } else {
+        annotations.forEach((ann, idx) => {
+          const row = document.createElement('tr');
+          row.className = 'hover:bg-slate-900/60 transition';
+          const isPathology = ann.category.includes('Pathology');
+          const typeBadge = isPathology
+            ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">Pathology</span>'
+            : '<span class="px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">Restoration</span>';
+
+          const pct = ann.confidence_pct || (ann.confidence * 100).toFixed(1);
+          const bb = ann.bounding_box || { x1: 0, y1: 0, x2: 0, y2: 0 };
+
+          row.innerHTML = `
+            <td class="py-3 px-4 text-center font-mono text-slate-500 font-bold">${idx + 1}</td>
+            <td class="py-3 px-4">
+              <div class="flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full border border-white/50 flex-shrink-0" style="background-color: ${ann.color};"></span>
+                <span class="font-bold text-white">${ann.label}</span>
+              </div>
+            </td>
+            <td class="py-3 px-4">${typeBadge}</td>
+            <td class="py-3 px-4">
+              <div class="flex items-center gap-2">
+                <div class="w-16 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div class="bg-cyan-400 h-1.5 rounded-full" style="width: ${pct}%"></div>
+                </div>
+                <span class="font-mono text-xs text-slate-200 font-semibold">${pct}%</span>
+              </div>
+            </td>
+            <td class="py-3 px-4 font-mono text-[11px] text-slate-400">
+              (${Math.round(bb.x1)}, ${Math.round(bb.y1)}) &rarr; (${Math.round(bb.x2)}, ${Math.round(bb.y2)})
+            </td>
+            <td class="py-3 px-4 text-slate-300 text-xs">${ann.clinical_note}</td>
+          `;
+          findingsTableBody.appendChild(row);
+        });
+      }
+    }
+
+    // Copy Summary to Clipboard
+    copySummaryBtn.addEventListener('click', () => {
+      if (!lastAnalysisData || !lastAnalysisData.problems_summary) return;
+      let text = `Dent AI Diagnostic Report - Dental Radiograph Analysis\\n`;
+      text += `Total Sites Identified: ${lastAnalysisData.annotations.length}\\n`;
+      text += `Condition Types: ${lastAnalysisData.problems_summary.length}\\n\\n`;
+      text += `AFFECTED PROBLEMS SUMMARY:\\n`;
+      lastAnalysisData.problems_summary.forEach(p => {
+        text += `- ${p.name}: ${p.count} site(s) | Avg Confidence: ${p.avg_confidence}%\\n  Guidance: ${p.clinical_note}\\n`;
+      });
+      navigator.clipboard.writeText(text).then(() => {
+        const originalHtml = copySummaryBtn.innerHTML;
+        copySummaryBtn.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i> Copied!';
+        setTimeout(() => copySummaryBtn.innerHTML = originalHtml, 2000);
+      });
+    });
+
+    // Print Findings Report
+    printReportBtn.addEventListener('click', () => {
+      window.print();
     });
   </script>
 </body>
@@ -591,7 +850,7 @@ def api_analyze():
     conf_thresh = float(request.form.get('conf', 0.25))
     filter_cat = request.form.get('filter_category', 'all')
 
-    composite_img, annotations, counts, elapsed = process_dental_image(
+    composite_img, annotations, counts, problems_summary, elapsed = process_dental_image(
         img,
         show_boxes=show_boxes,
         fill_alpha=fill_alpha,
@@ -608,6 +867,7 @@ def api_analyze():
         "status": "success",
         "annotations": annotations,
         "condition_counts": counts,
+        "problems_summary": problems_summary,
         "elapsed_seconds": elapsed,
         "image_base64": img_b64
     })
@@ -629,7 +889,7 @@ def get_coordinates():
     fill_alpha = float(request.form.get('fill_alpha', request.args.get('fill_alpha', 0.45)))
     conf_thresh = float(request.form.get('conf', request.args.get('conf', 0.25)))
 
-    composite_img, annotations, counts, _ = process_dental_image(
+    composite_img, annotations, counts, problems_summary, _ = process_dental_image(
         img,
         show_boxes=show_boxes,
         fill_alpha=fill_alpha,
@@ -638,6 +898,7 @@ def get_coordinates():
 
     result = {
         "annotations": annotations,
+        "problems_summary": problems_summary,
         "status": "OPEN"
     }
     print(result)
